@@ -1,0 +1,1397 @@
+From 292cbd2409708b7fbd54040c03addd0a037d34bc Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Fri, 30 Oct 2026 10:02:38 +0000
+Subject: [PATCH] Issue JWT from GBM login and expose GBM Home.
+
+GBM is now a standalone Spring Boot app on 8081. Login returns a
+Bearer token, Home lists the PPF module, and logout revokes the
+token. Session cookies are not used across JARs.
+---
+ .gitignore                                    |   2 +
+ HELP.md                                       |  38 +---
+ README.md                                     |  64 +++++++
+ mvnw                                          |   0
+ pom.xml                                       |  93 ++++++++--
+ .../gbm/advice/GlobalExceptionHandler.java    |  11 +-
+ .../com/idbi/gbm/config/DemoUserLoader.java   |  34 ++++
+ .../gbm/config/SecurityConfiguration.java     |  63 ++++---
+ .../idbi/gbm/controller/AuthController.java   |  48 +++--
+ .../idbi/gbm/controller/CsrfController.java   |  18 --
+ .../idbi/gbm/controller/HomeController.java   |  35 ++++
+ src/main/java/com/idbi/gbm/dto/AuthDtos.java  |  30 ++-
+ .../gbm/filter/JwtAuthenticationFilter.java   |  60 ++++++
+ .../com/idbi/gbm/filter/package-info.java     |   3 +-
+ .../com/idbi/gbm/security/JwtService.java     |  84 +++++++++
+ .../com/idbi/gbm/security/TokenDenylist.java  |  32 ++++
+ .../com/idbi/gbm/service/AuthService.java     |   9 +-
+ .../idbi/gbm/serviceImpl/AuthServiceImpl.java |  67 ++++---
+ src/main/resources/application-h2.properties  |   7 +
+ src/main/resources/application.properties     |  22 ++-
+ src/main/resources/db/schema-oracle.sql       |  12 ++
+ src/main/resources/static/index.html          | 171 ++++++++++++++++++
+ src/test/java/com/idbi/gbm/AuthFlowTest.java  |  63 +++++++
+ .../com/idbi/gbm/GbmApplicationTests.java     |   8 +-
+ .../resources/application-test.properties     |   8 +
+ 25 files changed, 813 insertions(+), 169 deletions(-)
+ create mode 100644 README.md
+ mode change 100644 => 100755 mvnw
+ create mode 100644 src/main/java/com/idbi/gbm/config/DemoUserLoader.java
+ delete mode 100644 src/main/java/com/idbi/gbm/controller/CsrfController.java
+ create mode 100644 src/main/java/com/idbi/gbm/controller/HomeController.java
+ create mode 100644 src/main/java/com/idbi/gbm/filter/JwtAuthenticationFilter.java
+ create mode 100644 src/main/java/com/idbi/gbm/security/JwtService.java
+ create mode 100644 src/main/java/com/idbi/gbm/security/TokenDenylist.java
+ create mode 100644 src/main/resources/application-h2.properties
+ create mode 100644 src/main/resources/db/schema-oracle.sql
+ create mode 100644 src/main/resources/static/index.html
+ create mode 100644 src/test/java/com/idbi/gbm/AuthFlowTest.java
+ create mode 100644 src/test/resources/application-test.properties
+
+diff --git a/.gitignore b/.gitignore
+index 08139d6..3f0fe36 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,4 +1,5 @@
+ ﻿target/
++bin/
+ .idea/
+ *.iml
+ .classpath
+@@ -8,3 +9,4 @@ node_modules/
+ dist/
+ .env
+ *.log
++*.class
+diff --git a/HELP.md b/HELP.md
+index bc2a956..ec71333 100644
+--- a/HELP.md
++++ b/HELP.md
+@@ -1,36 +1,6 @@
+-# Getting Started
++# GBM
+ 
+-### Reference Documentation
+-For further reference, please consider the following sections:
+-
+-* [Official Apache Maven documentation](https://maven.apache.org/guides/index.html)
+-* [Spring Boot Maven Plugin Reference Guide](https://docs.spring.io/spring-boot/4.0.9/maven-plugin)
+-* [Create an OCI image](https://docs.spring.io/spring-boot/4.0.9/maven-plugin/build-image.html)
+-* [Spring Web](https://docs.spring.io/spring-boot/4.0.9/reference/web/servlet.html)
+-* [Spring Security](https://docs.spring.io/spring-boot/4.0.9/reference/web/spring-security.html)
+-* [Spring Session for Spring Data Redis](https://docs.spring.io/spring-session/reference/)
+-* [Spring Data JPA](https://docs.spring.io/spring-boot/4.0.9/reference/data/sql.html#data.sql.jpa-and-spring-data)
+-* [Validation](https://docs.spring.io/spring-boot/4.0.9/reference/io/validation.html)
+-* [Spring Boot Actuator](https://docs.spring.io/spring-boot/4.0.9/reference/actuator/index.html)
+-* [OAuth2 Authorization Server](https://docs.spring.io/spring-boot/4.0.9/reference/web/spring-security.html#web.security.oauth2.authorization-server)
+-
+-### Guides
+-The following guides illustrate how to use some features concretely:
+-
+-* [Building a RESTful Web Service](https://spring.io/guides/gs/rest-service/)
+-* [Serving Web Content with Spring MVC](https://spring.io/guides/gs/serving-web-content/)
+-* [Building REST services with Spring](https://spring.io/guides/tutorials/rest/)
+-* [Securing a Web Application](https://spring.io/guides/gs/securing-web/)
+-* [Spring Boot and OAuth2](https://spring.io/guides/tutorials/spring-boot-oauth2/)
+-* [Authenticating a User with LDAP](https://spring.io/guides/gs/authenticating-ldap/)
+-* [Accessing Data with JPA](https://spring.io/guides/gs/accessing-data-jpa/)
+-* [Validation](https://spring.io/guides/gs/validating-form-input/)
+-* [Building a RESTful Web Service with Spring Boot Actuator](https://spring.io/guides/gs/actuator-service/)
+-
+-### Maven Parent overrides
+-
+-Due to Maven's design, elements are inherited from the parent POM to the project POM.
+-While most of the inheritance is fine, it also inherits unwanted elements like `<license>` and `<developers>` from the parent.
+-To prevent this, the project POM contains empty overrides for these elements.
+-If you manually switch to a different parent and actually want the inheritance, you need to remove those overrides.
++Standalone Spring Boot platform for Government Business Module authentication.
+ 
++Run with `./mvnw spring-boot:run -Dspring-boot.run.profiles=h2` and open http://localhost:8081.
++See README.md for the GBM ↔ PPF JWT flow.
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..e1030bc
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,64 @@
++# GBM Platform
++
++GBM owns **login, logout, session/JWT, filters, and user management**. Scheme modules such as PPF are separate Spring Boot apps.
++
++## Flow
++
++1. Browser opens GBM on port **8081**.
++2. User logs in. GBM returns a **JWT**.
++3. GBM Home lists modules (PPF first).
++4. Opening PPF sends the **same JWT** to PPF on port **8082**.
++5. PPF does **not** log the user in again. It only verifies the token.
++
++```
++Browser
++  ├─ /api/auth/*, /api/home  →  GBM  :8081
++  └─ /api/ppf/*              →  PPF  :8082   (Authorization: Bearer <jwt>)
++```
++
++Both apps must use the same `GBM_TOKEN_SECRET`.
++
++## Run locally (H2, no Oracle)
++
++Terminal 1:
++
++```bash
++./mvnw spring-boot:run -Dspring-boot.run.profiles=h2
++```
++
++Demo user (H2 profile only): `admin.ppf` / `Admin@123456`
++
++Then start [PPF](https://github.com/autidnyanesh/PPF) with the same secret and profile `h2`.
++
++Open http://localhost:8081
++
++## Oracle
++
++```bash
++export GBM_DB_URL=jdbc:oracle:thin:@localhost:1521:xe
++export GBM_DB_USERNAME=...
++export GBM_DB_PASSWORD=...
++export GBM_TOKEN_SECRET=change-me-to-a-long-shared-secret-32b
++./mvnw spring-boot:run
++```
++
++Optional table script: `src/main/resources/db/schema-oracle.sql`
++
++First admin (once):
++
++```bash
++curl -X POST http://localhost:8081/api/auth/bootstrap \
++  -H "Content-Type: application/json" \
++  -d '{"username":"admin.ppf","password":"Admin@123456","displayName":"GBM Admin"}'
++```
++
++## API
++
++| Method | Path | Auth |
++|---|---|---|
++| POST | `/api/auth/bootstrap` | public, first user only |
++| POST | `/api/auth/login` | public |
++| POST | `/api/auth/logout` | JWT |
++| GET | `/api/auth/me` | JWT |
++| GET/POST/PATCH/DELETE | `/api/auth/users` | JWT + ADMIN |
++| GET | `/api/home` | JWT |
+diff --git a/mvnw b/mvnw
+old mode 100644
+new mode 100755
+diff --git a/pom.xml b/pom.xml
+index 8cf74ad..a6531f8 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -3,21 +3,88 @@
+          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+   <modelVersion>4.0.0</modelVersion>
+   <parent>
+-    <groupId>com.idbi</groupId><artifactId>gbm-parent</artifactId><version>1.0.0-SNAPSHOT</version>
+-    <relativePath>../pom.xml</relativePath>
++    <groupId>org.springframework.boot</groupId>
++    <artifactId>spring-boot-starter-parent</artifactId>
++    <version>3.4.5</version>
++    <relativePath/>
+   </parent>
++  <groupId>com.idbi</groupId>
+   <artifactId>gbm</artifactId>
++  <version>1.0.0-SNAPSHOT</version>
++  <name>GBM Platform</name>
++  <description>GBM login, session, JWT, and user management</description>
++  <properties>
++    <java.version>21</java.version>
++    <jjwt.version>0.12.6</jjwt.version>
++  </properties>
+   <dependencies>
+-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
+-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-security</artifactId></dependency>
+-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
+-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-jpa</artifactId></dependency>
+-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+-    <dependency><groupId>com.oracle.database.jdbc</groupId><artifactId>ojdbc17</artifactId><scope>runtime</scope></dependency>
+-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
++    <dependency>
++      <groupId>org.springframework.boot</groupId>
++      <artifactId>spring-boot-starter-web</artifactId>
++    </dependency>
++    <dependency>
++      <groupId>org.springframework.boot</groupId>
++      <artifactId>spring-boot-starter-security</artifactId>
++    </dependency>
++    <dependency>
++      <groupId>org.springframework.boot</groupId>
++      <artifactId>spring-boot-starter-actuator</artifactId>
++    </dependency>
++    <dependency>
++      <groupId>org.springframework.boot</groupId>
++      <artifactId>spring-boot-starter-data-jpa</artifactId>
++    </dependency>
++    <dependency>
++      <groupId>org.springframework.boot</groupId>
++      <artifactId>spring-boot-starter-validation</artifactId>
++    </dependency>
++    <dependency>
++      <groupId>io.jsonwebtoken</groupId>
++      <artifactId>jjwt-api</artifactId>
++      <version>${jjwt.version}</version>
++    </dependency>
++    <dependency>
++      <groupId>io.jsonwebtoken</groupId>
++      <artifactId>jjwt-impl</artifactId>
++      <version>${jjwt.version}</version>
++      <scope>runtime</scope>
++    </dependency>
++    <dependency>
++      <groupId>io.jsonwebtoken</groupId>
++      <artifactId>jjwt-jackson</artifactId>
++      <version>${jjwt.version}</version>
++      <scope>runtime</scope>
++    </dependency>
++    <dependency>
++      <groupId>com.oracle.database.jdbc</groupId>
++      <artifactId>ojdbc11</artifactId>
++      <scope>runtime</scope>
++    </dependency>
++    <dependency>
++      <groupId>com.h2database</groupId>
++      <artifactId>h2</artifactId>
++      <scope>runtime</scope>
++    </dependency>
++    <dependency>
++      <groupId>org.springframework.boot</groupId>
++      <artifactId>spring-boot-starter-test</artifactId>
++      <scope>test</scope>
++    </dependency>
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-test</artifactId>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+-  <build><plugins><plugin>
+-    <groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId>
+-    <configuration><classifier>exec</classifier><mainClass>com.idbi.gbm.GbmApplication</mainClass></configuration>
+-  </plugin></plugins></build>
++  <build>
++    <plugins>
++      <plugin>
++        <groupId>org.springframework.boot</groupId>
++        <artifactId>spring-boot-maven-plugin</artifactId>
++        <configuration>
++          <mainClass>com.idbi.gbm.GbmApplication</mainClass>
++        </configuration>
++      </plugin>
++    </plugins>
++  </build>
+ </project>
+diff --git a/src/main/java/com/idbi/gbm/advice/GlobalExceptionHandler.java b/src/main/java/com/idbi/gbm/advice/GlobalExceptionHandler.java
+index a28356f..e128c07 100644
+--- a/src/main/java/com/idbi/gbm/advice/GlobalExceptionHandler.java
++++ b/src/main/java/com/idbi/gbm/advice/GlobalExceptionHandler.java
+@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
+ import org.springframework.web.bind.annotation.RestControllerAdvice;
+ import org.springframework.web.server.ResponseStatusException;
+ 
+-@RestControllerAdvice(basePackages = {"com.idbi.gbm", "com.idbi.ppf"})
++@RestControllerAdvice(basePackages = "com.idbi.gbm")
+ public class GlobalExceptionHandler {
+     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+ 
+@@ -49,7 +49,8 @@ public class GlobalExceptionHandler {
+     }
+ 
+     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+-    public ResponseEntity<ApiDtos.ErrorResponse> handleConcurrentUpdate(ObjectOptimisticLockingFailureException exception) {
++    public ResponseEntity<ApiDtos.ErrorResponse> handleConcurrentUpdate(
++            ObjectOptimisticLockingFailureException exception) {
+         return response(HttpStatus.CONFLICT, "CONCURRENT_UPDATE", "The record changed; reload it and try again", Map.of());
+     }
+ 
+@@ -59,10 +60,8 @@ public class GlobalExceptionHandler {
+         return response(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "An unexpected error occurred", Map.of());
+     }
+ 
+-    private ResponseEntity<ApiDtos.ErrorResponse> response(HttpStatus status, String code, String message,
+-            Map<String, String> fieldErrors) {
++    private ResponseEntity<ApiDtos.ErrorResponse> response(
++            HttpStatus status, String code, String message, Map<String, String> fieldErrors) {
+         return ResponseEntity.status(status).body(new ApiDtos.ErrorResponse(code, message, Instant.now(), fieldErrors));
+     }
+ }
+-
+-
+diff --git a/src/main/java/com/idbi/gbm/config/DemoUserLoader.java b/src/main/java/com/idbi/gbm/config/DemoUserLoader.java
+new file mode 100644
+index 0000000..f4127d3
+--- /dev/null
++++ b/src/main/java/com/idbi/gbm/config/DemoUserLoader.java
+@@ -0,0 +1,34 @@
++package com.idbi.gbm.config;
++
++import com.idbi.gbm.entity.GbmUser;
++import com.idbi.gbm.entity.UserRole;
++import com.idbi.gbm.repository.GbmUserRepository;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.boot.ApplicationArguments;
++import org.springframework.boot.ApplicationRunner;
++import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.stereotype.Component;
++
++@Component
++@ConditionalOnProperty(name = "gbm.seed-demo-admin", havingValue = "true")
++public class DemoUserLoader implements ApplicationRunner {
++    private static final Logger log = LoggerFactory.getLogger(DemoUserLoader.class);
++    private final GbmUserRepository users;
++    private final PasswordEncoder passwordEncoder;
++
++    public DemoUserLoader(GbmUserRepository users, PasswordEncoder passwordEncoder) {
++        this.users = users;
++        this.passwordEncoder = passwordEncoder;
++    }
++
++    @Override
++    public void run(ApplicationArguments args) {
++        if (users.count() > 0) {
++            return;
++        }
++        users.save(new GbmUser("admin.ppf", passwordEncoder.encode("Admin@123456"), "GBM Admin", UserRole.ADMIN));
++        log.info("Seeded demo admin username=admin.ppf password=Admin@123456");
++    }
++}
+diff --git a/src/main/java/com/idbi/gbm/config/SecurityConfiguration.java b/src/main/java/com/idbi/gbm/config/SecurityConfiguration.java
+index b40e45f..804e79c 100644
+--- a/src/main/java/com/idbi/gbm/config/SecurityConfiguration.java
++++ b/src/main/java/com/idbi/gbm/config/SecurityConfiguration.java
+@@ -1,10 +1,13 @@
+ package com.idbi.gbm.config;
+ 
++import com.idbi.gbm.filter.JwtAuthenticationFilter;
+ import com.idbi.gbm.security.GbmUserDetailsService;
++import java.util.Arrays;
+ import java.util.List;
+ import org.springframework.beans.factory.annotation.Value;
+ import org.springframework.context.annotation.Bean;
+ import org.springframework.context.annotation.Configuration;
++import org.springframework.http.HttpMethod;
+ import org.springframework.security.authentication.AuthenticationManager;
+ import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+ import org.springframework.security.config.Customizer;
+@@ -15,9 +18,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
+ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+ import org.springframework.security.crypto.password.PasswordEncoder;
+ import org.springframework.security.web.SecurityFilterChain;
+-import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+-import org.springframework.security.web.context.SecurityContextRepository;
+-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
++import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+ import org.springframework.web.cors.CorsConfiguration;
+ import org.springframework.web.cors.CorsConfigurationSource;
+ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+@@ -25,15 +26,18 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+ @Configuration
+ @EnableMethodSecurity
+ public class SecurityConfiguration {
+-    @Value("${FRONTEND_ORIGIN:http://localhost:5173}")
+-    private String frontendOrigin;
++    @Value("${gbm.cors.allowed-origins}")
++    private String allowedOrigins;
+ 
+     @Bean
+-    PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(12); }
++    PasswordEncoder passwordEncoder() {
++        return new BCryptPasswordEncoder(12);
++    }
+ 
+     @Bean
+     DaoAuthenticationProvider authenticationProvider(GbmUserDetailsService users, PasswordEncoder encoder) {
+-        DaoAuthenticationProvider provider = new DaoAuthenticationProvider(users);
++        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
++        provider.setUserDetailsService(users);
+         provider.setPasswordEncoder(encoder);
+         return provider;
+     }
+@@ -43,41 +47,48 @@ public class SecurityConfiguration {
+         return configuration.getAuthenticationManager();
+     }
+ 
+-    @Bean
+-    SecurityContextRepository securityContextRepository() {
+-        return new HttpSessionSecurityContextRepository();
+-    }
+-
+     @Bean
+     CorsConfigurationSource corsConfigurationSource() {
+         CorsConfiguration cors = new CorsConfiguration();
+-        cors.setAllowedOrigins(List.of(frontendOrigin));
++        cors.setAllowedOrigins(Arrays.stream(allowedOrigins.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList());
+         cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
+-        cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN"));
+-        cors.setAllowCredentials(true);
++        cors.setAllowedHeaders(List.of("Authorization", "Content-Type"));
++        cors.setExposedHeaders(List.of("Authorization"));
++        cors.setAllowCredentials(false);
+         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+         source.registerCorsConfiguration("/**", cors);
+         return source;
+     }
+ 
+     @Bean
+-    SecurityFilterChain securityFilterChain(HttpSecurity http, DaoAuthenticationProvider provider) throws Exception {
++    SecurityFilterChain securityFilterChain(HttpSecurity http, DaoAuthenticationProvider provider,
++            JwtAuthenticationFilter jwtAuthenticationFilter) throws Exception {
+         return http
+                 .cors(Customizer.withDefaults())
++                .csrf(csrf -> csrf.disable())
+                 .authenticationProvider(provider)
+-                .csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
++                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
++                .exceptionHandling(exceptions -> exceptions
++                        .authenticationEntryPoint((request, response, exception) -> {
++                            response.setStatus(401);
++                            response.setContentType("application/json");
++                            response.getWriter().write(
++                                    "{\"code\":\"AUTHENTICATION_FAILED\",\"message\":\"Login required\"}");
++                        })
++                        .accessDeniedHandler((request, response, exception) -> {
++                            response.setStatus(403);
++                            response.setContentType("application/json");
++                            response.getWriter().write("{\"code\":\"ACCESS_DENIED\",\"message\":\"Not allowed\"}");
++                        }))
+                 .authorizeHttpRequests(authorize -> authorize
+-                        .requestMatchers("/actuator/health", "/api/auth/csrf", "/api/auth/bootstrap", "/api/auth/login").permitAll()
++                        .requestMatchers("/", "/index.html", "/favicon.ico", "/css/**", "/js/**").permitAll()
++                        .requestMatchers("/actuator/health").permitAll()
++                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
++                        .requestMatchers(HttpMethod.POST, "/api/auth/bootstrap", "/api/auth/login").permitAll()
+                         .requestMatchers("/api/auth/users", "/api/auth/users/**").hasRole("ADMIN")
+-                        .requestMatchers("/api/auth/logout", "/api/auth/me").authenticated()
+-                        .requestMatchers("/api/ppf/**").authenticated()
++                        .requestMatchers("/api/auth/**", "/api/home").authenticated()
+                         .anyRequest().denyAll())
+-                .sessionManagement(session -> session
+-                        .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+-                        .sessionFixation(fixation -> fixation.changeSessionId()))
++                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                 .build();
+     }
+ }
+-
+-
+-
+diff --git a/src/main/java/com/idbi/gbm/controller/AuthController.java b/src/main/java/com/idbi/gbm/controller/AuthController.java
+index d9ab49d..2f22c99 100644
+--- a/src/main/java/com/idbi/gbm/controller/AuthController.java
++++ b/src/main/java/com/idbi/gbm/controller/AuthController.java
+@@ -1,19 +1,16 @@
+ package com.idbi.gbm.controller;
+ 
+ import com.idbi.gbm.dto.AuthDtos;
++import com.idbi.gbm.entity.GbmUser;
++import com.idbi.gbm.repository.GbmUserRepository;
++import com.idbi.gbm.security.JwtService;
+ import com.idbi.gbm.service.AuthService;
+ import jakarta.servlet.http.HttpServletRequest;
+-import jakarta.servlet.http.HttpServletResponse;
+-import jakarta.servlet.http.HttpSession;
+ import jakarta.validation.Valid;
+-import java.time.Instant;
+ import org.springframework.http.HttpStatus;
+ import org.springframework.security.authentication.AuthenticationManager;
+ import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+ import org.springframework.security.core.Authentication;
+-import org.springframework.security.core.context.SecurityContext;
+-import org.springframework.security.core.context.SecurityContextHolder;
+-import org.springframework.security.web.context.SecurityContextRepository;
+ import org.springframework.web.bind.annotation.GetMapping;
+ import org.springframework.web.bind.annotation.PostMapping;
+ import org.springframework.web.bind.annotation.RequestBody;
+@@ -24,16 +21,20 @@ import org.springframework.web.server.ResponseStatusException;
+ @RestController
+ @RequestMapping("/api/auth")
+ public class AuthController {
+-    private static final long SESSION_TTL_SECONDS = 30 * 60;
+     private final AuthService authService;
+     private final AuthenticationManager authenticationManager;
+-    private final SecurityContextRepository securityContextRepository;
++    private final GbmUserRepository users;
++    private final JwtService jwtService;
+ 
+-    public AuthController(AuthService authService, AuthenticationManager authenticationManager,
+-            SecurityContextRepository securityContextRepository) {
++    public AuthController(
++            AuthService authService,
++            AuthenticationManager authenticationManager,
++            GbmUserRepository users,
++            JwtService jwtService) {
+         this.authService = authService;
+         this.authenticationManager = authenticationManager;
+-        this.securityContextRepository = securityContextRepository;
++        this.users = users;
++        this.jwtService = jwtService;
+     }
+ 
+     @PostMapping("/bootstrap")
+@@ -42,32 +43,27 @@ public class AuthController {
+     }
+ 
+     @PostMapping("/login")
+-    public AuthDtos.LoginResponse login(@Valid @RequestBody AuthDtos.LoginRequest request,
+-            HttpServletRequest servletRequest, HttpServletResponse servletResponse) {
++    public AuthDtos.LoginResponse login(@Valid @RequestBody AuthDtos.LoginRequest request) {
+         Authentication authentication = authenticationManager.authenticate(
+                 UsernamePasswordAuthenticationToken.unauthenticated(request.username(), request.password()));
+-        SecurityContext context = SecurityContextHolder.createEmptyContext();
+-        context.setAuthentication(authentication);
+-        SecurityContextHolder.setContext(context);
+-        securityContextRepository.saveContext(context, servletRequest, servletResponse);
+-        AuthDtos.UserSummary user = authService.findByUsername(authentication.getName());
+-        return new AuthDtos.LoginResponse(user, Instant.now().plusSeconds(SESSION_TTL_SECONDS));
++        GbmUser user = users.findByUsernameIgnoreCase(authentication.getName())
++                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password"));
++        String token = jwtService.createToken(user);
++        return new AuthDtos.LoginResponse(
++                token, JwtService.TOKEN_TYPE, jwtService.expiresAt(), authService.toSummary(user));
+     }
+ 
+     @PostMapping("/logout")
+-    public AuthDtos.LogoutResponse logout(HttpServletRequest request, HttpServletResponse response) {
+-        SecurityContextHolder.clearContext();
+-        HttpSession session = request.getSession(false);
+-        if (session != null) session.invalidate();
+-        securityContextRepository.saveContext(SecurityContextHolder.createEmptyContext(), request, response);
++    public AuthDtos.LogoutResponse logout(HttpServletRequest request) {
++        jwtService.revoke(request.getHeader("Authorization"));
+         return new AuthDtos.LogoutResponse(true);
+     }
+ 
+     @GetMapping("/me")
+     public AuthDtos.UserSummary me(Authentication authentication) {
+-        if (authentication == null || !authentication.isAuthenticated())
++        if (authentication == null || !authentication.isAuthenticated()) {
+             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Login required");
++        }
+         return authService.findByUsername(authentication.getName());
+     }
+ }
+-
+diff --git a/src/main/java/com/idbi/gbm/controller/CsrfController.java b/src/main/java/com/idbi/gbm/controller/CsrfController.java
+deleted file mode 100644
+index 91371cd..0000000
+--- a/src/main/java/com/idbi/gbm/controller/CsrfController.java
++++ /dev/null
+@@ -1,18 +0,0 @@
+-package com.idbi.gbm.controller;
+-
+-import java.util.Map;
+-import org.springframework.security.web.csrf.CsrfToken;
+-import org.springframework.web.bind.annotation.GetMapping;
+-import org.springframework.web.bind.annotation.RequestMapping;
+-import org.springframework.web.bind.annotation.RestController;
+-
+-@RestController
+-@RequestMapping("/api/auth")
+-public class CsrfController {
+-    @GetMapping("/csrf")
+-    public Map<String, String> csrf(CsrfToken token) {
+-        return Map.of("headerName", token.getHeaderName(), "parameterName", token.getParameterName(),
+-                "token", token.getToken());
+-    }
+-}
+-
+diff --git a/src/main/java/com/idbi/gbm/controller/HomeController.java b/src/main/java/com/idbi/gbm/controller/HomeController.java
+new file mode 100644
+index 0000000..60ebbe7
+--- /dev/null
++++ b/src/main/java/com/idbi/gbm/controller/HomeController.java
+@@ -0,0 +1,35 @@
++package com.idbi.gbm.controller;
++
++import com.idbi.gbm.dto.AuthDtos;
++import com.idbi.gbm.service.AuthService;
++import java.util.List;
++import java.util.Map;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.security.core.Authentication;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.RestController;
++
++@RestController
++public class HomeController {
++    private final AuthService authService;
++    private final String ppfBaseUrl;
++
++    public HomeController(AuthService authService, @Value("${gbm.modules.ppf-url}") String ppfBaseUrl) {
++        this.authService = authService;
++        this.ppfBaseUrl = ppfBaseUrl;
++    }
++
++    @GetMapping("/api/home")
++    public Map<String, Object> home(Authentication authentication) {
++        AuthDtos.UserSummary user = authService.findByUsername(authentication.getName());
++        return Map.of(
++                "message", "Welcome To GBM",
++                "user", user,
++                "modules", List.of(Map.of(
++                        "code", "PPF",
++                        "name", "Public Provident Fund",
++                        "baseUrl", ppfBaseUrl,
++                        "homePath", "/api/ppf/home",
++                        "accountsPath", "/api/ppf/accounts")));
++    }
++}
+diff --git a/src/main/java/com/idbi/gbm/dto/AuthDtos.java b/src/main/java/com/idbi/gbm/dto/AuthDtos.java
+index 4c29e13..b6c5d38 100644
+--- a/src/main/java/com/idbi/gbm/dto/AuthDtos.java
++++ b/src/main/java/com/idbi/gbm/dto/AuthDtos.java
+@@ -9,17 +9,33 @@ public final class AuthDtos {
+     private AuthDtos() {}
+ 
+     public record LoginRequest(@NotBlank @Size(max = 100) String username, @NotBlank String password) {}
+-    public record BootstrapRequest(@NotBlank @Size(max = 100) String username,
++
++    public record BootstrapRequest(
++            @NotBlank @Size(max = 100) String username,
+             @NotBlank @Size(min = 12, max = 128) String password,
+             @NotBlank @Size(max = 160) String displayName) {}
+-    public record CreateUserRequest(@NotBlank @Size(max = 100) String username,
++
++    public record CreateUserRequest(
++            @NotBlank @Size(max = 100) String username,
+             @NotBlank @Size(min = 12, max = 128) String password,
+-            @NotBlank @Size(max = 160) String displayName, UserRole role) {}
+-    public record UpdateUserRequest(@Size(max = 160) String displayName, UserRole role, Boolean enabled,
++            @NotBlank @Size(max = 160) String displayName,
++            UserRole role) {}
++
++    public record UpdateUserRequest(
++            @Size(max = 160) String displayName,
++            UserRole role,
++            Boolean enabled,
+             @Size(min = 12, max = 128) String newPassword) {}
+-    public record UserSummary(Long id, String username, String displayName, UserRole role, boolean enabled,
++
++    public record UserSummary(
++            Long id,
++            String username,
++            String displayName,
++            UserRole role,
++            boolean enabled,
+             Instant createdAt) {}
+-    public record LoginResponse(UserSummary user, Instant expiresAt) {}
++
++    public record LoginResponse(String token, String tokenType, Instant expiresAt, UserSummary user) {}
++
+     public record LogoutResponse(boolean loggedOut) {}
+ }
+-
+diff --git a/src/main/java/com/idbi/gbm/filter/JwtAuthenticationFilter.java b/src/main/java/com/idbi/gbm/filter/JwtAuthenticationFilter.java
+new file mode 100644
+index 0000000..ecec6b7
+--- /dev/null
++++ b/src/main/java/com/idbi/gbm/filter/JwtAuthenticationFilter.java
+@@ -0,0 +1,60 @@
++package com.idbi.gbm.filter;
++
++import com.idbi.gbm.security.JwtService;
++import io.jsonwebtoken.Claims;
++import io.jsonwebtoken.JwtException;
++import jakarta.servlet.FilterChain;
++import jakarta.servlet.ServletException;
++import jakarta.servlet.http.HttpServletRequest;
++import jakarta.servlet.http.HttpServletResponse;
++import java.io.IOException;
++import java.util.List;
++import org.springframework.http.MediaType;
++import org.springframework.lang.NonNull;
++import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
++import org.springframework.security.core.authority.SimpleGrantedAuthority;
++import org.springframework.security.core.context.SecurityContextHolder;
++import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
++import org.springframework.stereotype.Component;
++import org.springframework.web.filter.OncePerRequestFilter;
++
++@Component
++public class JwtAuthenticationFilter extends OncePerRequestFilter {
++    private final JwtService jwtService;
++
++    public JwtAuthenticationFilter(JwtService jwtService) {
++        this.jwtService = jwtService;
++    }
++
++    @Override
++    protected void doFilterInternal(
++            @NonNull HttpServletRequest request,
++            @NonNull HttpServletResponse response,
++            @NonNull FilterChain filterChain) throws ServletException, IOException {
++        String token = JwtService.extractBearer(request.getHeader("Authorization"));
++        if (token == null) {
++            filterChain.doFilter(request, response);
++            return;
++        }
++        try {
++            Claims claims = jwtService.parse(token);
++            String username = claims.getSubject();
++            String role = String.valueOf(claims.get("role"));
++            if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
++                UsernamePasswordAuthenticationToken authentication =
++                        new UsernamePasswordAuthenticationToken(
++                                username,
++                                null,
++                                List.of(new SimpleGrantedAuthority("ROLE_" + role)));
++                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
++                SecurityContextHolder.getContext().setAuthentication(authentication);
++            }
++            filterChain.doFilter(request, response);
++        } catch (JwtException | IllegalArgumentException exception) {
++            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
++            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
++            response.getWriter().write(
++                    "{\"code\":\"AUTHENTICATION_FAILED\",\"message\":\"Invalid or expired token\"}");
++        }
++    }
++}
+diff --git a/src/main/java/com/idbi/gbm/filter/package-info.java b/src/main/java/com/idbi/gbm/filter/package-info.java
+index 5fcbaa9..6570f0b 100644
+--- a/src/main/java/com/idbi/gbm/filter/package-info.java
++++ b/src/main/java/com/idbi/gbm/filter/package-info.java
+@@ -1,3 +1,2 @@
+-/** Authentication and session filters belong here. */
++/** JWT bearer authentication filter. */
+ package com.idbi.gbm.filter;
+-
+diff --git a/src/main/java/com/idbi/gbm/security/JwtService.java b/src/main/java/com/idbi/gbm/security/JwtService.java
+new file mode 100644
+index 0000000..73831be
+--- /dev/null
++++ b/src/main/java/com/idbi/gbm/security/JwtService.java
+@@ -0,0 +1,84 @@
++package com.idbi.gbm.security;
++
++import com.idbi.gbm.entity.GbmUser;
++import io.jsonwebtoken.Claims;
++import io.jsonwebtoken.Jwts;
++import io.jsonwebtoken.security.Keys;
++import java.nio.charset.StandardCharsets;
++import java.time.Instant;
++import java.util.Date;
++import java.util.UUID;
++import javax.crypto.SecretKey;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.stereotype.Service;
++
++@Service
++public class JwtService {
++    public static final String TOKEN_TYPE = "Bearer";
++
++    private final SecretKey key;
++    private final long ttlMinutes;
++    private final TokenDenylist denylist;
++
++    public JwtService(
++            @Value("${gbm.jwt.secret}") String secret,
++            @Value("${gbm.jwt.ttl-minutes:30}") long ttlMinutes,
++            TokenDenylist denylist) {
++        byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
++        if (bytes.length < 32) {
++            throw new IllegalStateException("gbm.jwt.secret must be at least 32 bytes");
++        }
++        this.key = Keys.hmacShaKeyFor(bytes);
++        this.ttlMinutes = ttlMinutes;
++        this.denylist = denylist;
++    }
++
++    public Instant expiresAt() {
++        return Instant.now().plusSeconds(ttlMinutes * 60);
++    }
++
++    public String createToken(GbmUser user) {
++        Instant now = Instant.now();
++        Instant exp = now.plusSeconds(ttlMinutes * 60);
++        return Jwts.builder()
++                .id(UUID.randomUUID().toString())
++                .subject(user.getUsername())
++                .claim("uid", user.getId())
++                .claim("role", user.getRole().name())
++                .claim("displayName", user.getDisplayName())
++                .issuedAt(Date.from(now))
++                .expiration(Date.from(exp))
++                .signWith(key)
++                .compact();
++    }
++
++    public Claims parse(String token) {
++        Claims claims = Jwts.parser().verifyWith(key).build().parseSignedClaims(token).getPayload();
++        if (denylist.isRevoked(claims.getId())) {
++            throw new IllegalArgumentException("Token has been revoked");
++        }
++        return claims;
++    }
++
++    public void revoke(String authorizationHeader) {
++        String token = extractBearer(authorizationHeader);
++        if (token == null) {
++            return;
++        }
++        Claims claims = Jwts.parser().verifyWith(key).build().parseSignedClaims(token).getPayload();
++        Date expiration = claims.getExpiration();
++        denylist.revoke(claims.getId(), expiration == null ? expiresAt() : expiration.toInstant());
++    }
++
++    public static String extractBearer(String authorizationHeader) {
++        if (authorizationHeader == null) {
++            return null;
++        }
++        String value = authorizationHeader.trim();
++        if (value.length() < 8 || !value.regionMatches(true, 0, "Bearer ", 0, 7)) {
++            return null;
++        }
++        String token = value.substring(7).trim();
++        return token.isEmpty() ? null : token;
++    }
++}
+diff --git a/src/main/java/com/idbi/gbm/security/TokenDenylist.java b/src/main/java/com/idbi/gbm/security/TokenDenylist.java
+new file mode 100644
+index 0000000..cec712d
+--- /dev/null
++++ b/src/main/java/com/idbi/gbm/security/TokenDenylist.java
+@@ -0,0 +1,32 @@
++package com.idbi.gbm.security;
++
++import java.time.Instant;
++import java.util.concurrent.ConcurrentHashMap;
++import org.springframework.stereotype.Component;
++
++@Component
++public class TokenDenylist {
++    private final ConcurrentHashMap<String, Instant> revoked = new ConcurrentHashMap<>();
++
++    public void revoke(String jti, Instant expiresAt) {
++        if (jti == null || jti.isBlank()) {
++            return;
++        }
++        revoked.put(jti, expiresAt == null ? Instant.now().plusSeconds(1800) : expiresAt);
++    }
++
++    public boolean isRevoked(String jti) {
++        if (jti == null) {
++            return false;
++        }
++        Instant expiresAt = revoked.get(jti);
++        if (expiresAt == null) {
++            return false;
++        }
++        if (expiresAt.isBefore(Instant.now())) {
++            revoked.remove(jti);
++            return false;
++        }
++        return true;
++    }
++}
+diff --git a/src/main/java/com/idbi/gbm/service/AuthService.java b/src/main/java/com/idbi/gbm/service/AuthService.java
+index 675fdcd..03c6160 100644
+--- a/src/main/java/com/idbi/gbm/service/AuthService.java
++++ b/src/main/java/com/idbi/gbm/service/AuthService.java
+@@ -1,14 +1,21 @@
+ package com.idbi.gbm.service;
+ 
+ import com.idbi.gbm.dto.AuthDtos;
++import com.idbi.gbm.entity.GbmUser;
+ import java.util.List;
+ 
+ public interface AuthService {
+     AuthDtos.UserSummary bootstrap(AuthDtos.BootstrapRequest request);
++
+     AuthDtos.UserSummary findByUsername(String username);
++
+     List<AuthDtos.UserSummary> listUsers();
++
+     AuthDtos.UserSummary createUser(AuthDtos.CreateUserRequest request);
++
+     AuthDtos.UserSummary updateUser(long id, AuthDtos.UpdateUserRequest request);
++
+     void deleteUser(long id, String currentUsername);
+-}
+ 
++    AuthDtos.UserSummary toSummary(GbmUser user);
++}
+diff --git a/src/main/java/com/idbi/gbm/serviceImpl/AuthServiceImpl.java b/src/main/java/com/idbi/gbm/serviceImpl/AuthServiceImpl.java
+index 3dcc467..a73b6da 100644
+--- a/src/main/java/com/idbi/gbm/serviceImpl/AuthServiceImpl.java
++++ b/src/main/java/com/idbi/gbm/serviceImpl/AuthServiceImpl.java
+@@ -1,11 +1,10 @@
+ package com.idbi.gbm.serviceImpl;
+ 
+-import com.idbi.gbm.service.AuthService;
+-
+ import com.idbi.gbm.dto.AuthDtos;
+ import com.idbi.gbm.entity.GbmUser;
+ import com.idbi.gbm.entity.UserRole;
+ import com.idbi.gbm.repository.GbmUserRepository;
++import com.idbi.gbm.service.AuthService;
+ import java.util.List;
+ import org.springframework.http.HttpStatus;
+ import org.springframework.security.crypto.password.PasswordEncoder;
+@@ -23,67 +22,89 @@ public class AuthServiceImpl implements AuthService {
+         this.passwordEncoder = passwordEncoder;
+     }
+ 
++    @Override
+     @Transactional
+     public AuthDtos.UserSummary bootstrap(AuthDtos.BootstrapRequest request) {
+-        if (users.count() != 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "Initial administrator already exists");
+-        return toSummary(users.save(new GbmUser(request.username(), passwordEncoder.encode(request.password()),
+-                request.displayName(), UserRole.ADMIN)));
++        if (users.count() != 0) {
++            throw new ResponseStatusException(HttpStatus.CONFLICT, "Initial administrator already exists");
++        }
++        return toSummary(users.save(new GbmUser(
++                request.username(),
++                passwordEncoder.encode(request.password()),
++                request.displayName(),
++                UserRole.ADMIN)));
+     }
+ 
++    @Override
+     @Transactional(readOnly = true)
+     public AuthDtos.UserSummary findByUsername(String username) {
+-        return users.findByUsernameIgnoreCase(username).map(this::toSummary)
++        return users.findByUsernameIgnoreCase(username)
++                .map(this::toSummary)
+                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+     }
+ 
++    @Override
+     @Transactional(readOnly = true)
+     public List<AuthDtos.UserSummary> listUsers() {
+         return users.findAll().stream().map(this::toSummary).toList();
+     }
+ 
++    @Override
+     @Transactional
+     public AuthDtos.UserSummary createUser(AuthDtos.CreateUserRequest request) {
+-        if (users.existsByUsernameIgnoreCase(request.username()))
++        if (users.existsByUsernameIgnoreCase(request.username())) {
+             throw new ResponseStatusException(HttpStatus.CONFLICT, "Username already exists");
+-        GbmUser user = new GbmUser(request.username(), passwordEncoder.encode(request.password()),
+-                request.displayName(), request.role() == null ? UserRole.USER : request.role());
++        }
++        GbmUser user = new GbmUser(
++                request.username(),
++                passwordEncoder.encode(request.password()),
++                request.displayName(),
++                request.role() == null ? UserRole.USER : request.role());
+         return toSummary(users.save(user));
+     }
+ 
++    @Override
+     @Transactional
+     public AuthDtos.UserSummary updateUser(long id, AuthDtos.UpdateUserRequest request) {
+         GbmUser user = users.findById(id)
+                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+-        boolean removingEnabledAdmin = user.isEnabled() && user.getRole() == UserRole.ADMIN
++        boolean removingEnabledAdmin = user.isEnabled()
++                && user.getRole() == UserRole.ADMIN
+                 && (Boolean.FALSE.equals(request.enabled()) || request.role() == UserRole.USER);
+-        if (removingEnabledAdmin && users.countByRoleAndEnabledTrue(UserRole.ADMIN) <= 1)
++        if (removingEnabledAdmin && users.countByRoleAndEnabledTrue(UserRole.ADMIN) <= 1) {
+             throw new ResponseStatusException(HttpStatus.CONFLICT, "At least one administrator must remain enabled");
++        }
+         user.updateProfile(request.displayName(), request.role(), request.enabled());
+-        if (request.newPassword() != null && !request.newPassword().isBlank())
++        if (request.newPassword() != null && !request.newPassword().isBlank()) {
+             user.changePassword(passwordEncoder.encode(request.newPassword()));
++        }
+         return toSummary(user);
+     }
+ 
++    @Override
+     @Transactional
+     public void deleteUser(long id, String currentUsername) {
+         GbmUser user = users.findById(id)
+                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+-        if (user.getUsername().equalsIgnoreCase(currentUsername))
++        if (user.getUsername().equalsIgnoreCase(currentUsername)) {
+             throw new ResponseStatusException(HttpStatus.CONFLICT, "You cannot delete your own account");
+-        if (user.getRole() == UserRole.ADMIN && user.isEnabled()
+-                && users.countByRoleAndEnabledTrue(UserRole.ADMIN) <= 1)
++        }
++        if (user.getRole() == UserRole.ADMIN
++                && user.isEnabled()
++                && users.countByRoleAndEnabledTrue(UserRole.ADMIN) <= 1) {
+             throw new ResponseStatusException(HttpStatus.CONFLICT, "At least one administrator must remain");
++        }
+         users.delete(user);
+     }
+ 
++    @Override
+     public AuthDtos.UserSummary toSummary(GbmUser user) {
+-        return new AuthDtos.UserSummary(user.getId(), user.getUsername(), user.getDisplayName(),
+-                user.getRole(), user.isEnabled(), user.getCreatedAt());
++        return new AuthDtos.UserSummary(
++                user.getId(),
++                user.getUsername(),
++                user.getDisplayName(),
++                user.getRole(),
++                user.isEnabled(),
++                user.getCreatedAt());
+     }
+ }
+-
+-
+-
+-
+-
+-
+diff --git a/src/main/resources/application-h2.properties b/src/main/resources/application-h2.properties
+new file mode 100644
+index 0000000..131d27d
+--- /dev/null
++++ b/src/main/resources/application-h2.properties
+@@ -0,0 +1,7 @@
++spring.datasource.url=jdbc:h2:mem:gbm;MODE=Oracle;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=true
++spring.datasource.username=sa
++spring.datasource.password=
++spring.datasource.driver-class-name=org.h2.Driver
++spring.jpa.hibernate.ddl-auto=update
++spring.h2.console.enabled=true
++gbm.seed-demo-admin=true
+diff --git a/src/main/resources/application.properties b/src/main/resources/application.properties
+index 332c827..4b06362 100644
+--- a/src/main/resources/application.properties
++++ b/src/main/resources/application.properties
+@@ -1,16 +1,20 @@
+ spring.application.name=gbm
+ server.port=${GBM_SERVER_PORT:8081}
+-server.servlet.session.timeout=30m
+-server.servlet.session.cookie.name=GBMSESSION
+-server.servlet.session.cookie.http-only=true
+-server.servlet.session.cookie.same-site=lax
++
++gbm.jwt.secret=${GBM_TOKEN_SECRET:gbm-local-dev-secret-please-change-32bytes!}
++gbm.jwt.ttl-minutes=${GBM_TOKEN_TTL_MINUTES:30}
++gbm.modules.ppf-url=${PPF_BASE_URL:http://localhost:8082}
++gbm.cors.allowed-origins=${GBM_CORS_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:8081,http://127.0.0.1:8081}
++gbm.seed-demo-admin=${GBM_SEED_DEMO_ADMIN:false}
++
+ spring.datasource.url=${GBM_DB_URL:jdbc:oracle:thin:@localhost:1521:xe}
+-spring.datasource.username=${GBM_DB_USERNAME}
+-spring.datasource.password=${GBM_DB_PASSWORD}
++spring.datasource.username=${GBM_DB_USERNAME:gbm}
++spring.datasource.password=${GBM_DB_PASSWORD:gbm}
+ spring.datasource.driver-class-name=oracle.jdbc.OracleDriver
+-spring.jpa.hibernate.ddl-auto=validate
++spring.jpa.hibernate.ddl-auto=update
+ spring.jpa.show-sql=false
+ spring.jpa.open-in-view=false
+-management.endpoints.web.exposure.include=health,info
+-
++spring.jpa.properties.hibernate.jdbc.time_zone=UTC
+ 
++management.endpoints.web.exposure.include=health,info
++management.endpoint.health.show-details=never
+diff --git a/src/main/resources/db/schema-oracle.sql b/src/main/resources/db/schema-oracle.sql
+new file mode 100644
+index 0000000..1d16154
+--- /dev/null
++++ b/src/main/resources/db/schema-oracle.sql
+@@ -0,0 +1,12 @@
++-- Optional Oracle bootstrap for GBM users. The app also creates tables with ddl-auto=update.
++CREATE SEQUENCE GBM_USERS_SEQ START WITH 1 INCREMENT BY 1;
++
++CREATE TABLE GBM_USERS (
++  ID NUMBER(19) PRIMARY KEY,
++  USERNAME VARCHAR2(100) NOT NULL UNIQUE,
++  PASSWORD_HASH VARCHAR2(100) NOT NULL,
++  DISPLAY_NAME VARCHAR2(160) NOT NULL,
++  ROLE_NAME VARCHAR2(20) NOT NULL,
++  ENABLED NUMBER(1) DEFAULT 1 NOT NULL,
++  CREATED_AT TIMESTAMP NOT NULL
++);
+diff --git a/src/main/resources/static/index.html b/src/main/resources/static/index.html
+new file mode 100644
+index 0000000..72686b2
+--- /dev/null
++++ b/src/main/resources/static/index.html
+@@ -0,0 +1,171 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="UTF-8" />
++  <meta name="viewport" content="width=device-width, initial-scale=1" />
++  <title>GBM</title>
++  <style>
++    :root { --navy:#123a63; --bar:#0e2d4d; --accent:#1d5c96; --bg:#f4f6f8; --line:#d5dde6; }
++    * { box-sizing: border-box; }
++    body { margin:0; font-family: Arial, sans-serif; background:var(--bg); color:#1a1a1a; }
++    header { background:var(--navy); color:#fff; padding:10px 16px; display:flex; gap:16px; align-items:center; }
++    header strong { font-size:18px; }
++    nav { background:var(--bar); padding:8px 12px; display:flex; gap:8px; }
++    nav button, .btn { border:0; background:#2b6ea3; color:#fff; padding:8px 12px; cursor:pointer; }
++    nav button.active, .btn.primary { background:#f0f4f8; color:var(--navy); font-weight:bold; }
++    main { padding:20px; max-width:980px; margin:0 auto; }
++    .card { background:#fff; border:1px solid var(--line); padding:20px; margin-bottom:16px; }
++    label { display:block; font-size:13px; color:#445; margin:8px 0 4px; }
++    input, select { width:100%; padding:8px; border:1px solid var(--line); }
++    table { width:100%; border-collapse:collapse; }
++    th, td { border-bottom:1px solid var(--line); text-align:left; padding:8px; font-size:14px; }
++    .error { color:#a40000; margin-top:8px; }
++    .hidden { display:none; }
++    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
++  </style>
++</head>
++<body>
++  <header>
++    <strong>GBM</strong>
++    <span>Government Business Module</span>
++    <span id="userLabel"></span>
++  </header>
++  <nav id="moduleNav" class="hidden">
++    <button data-module="home" class="active">Home</button>
++    <button data-module="ppf">PPF</button>
++    <button id="logoutBtn">Logout</button>
++  </nav>
++  <main>
++    <section id="loginView" class="card">
++      <h2>GBM Login</h2>
++      <p>Sign in to the platform. PPF opens only after login, from GBM Home.</p>
++      <label>Username</label>
++      <input id="username" value="admin.ppf" />
++      <label>Password</label>
++      <input id="password" type="password" value="Admin@123456" />
++      <p><button class="btn primary" id="loginBtn">Login</button></p>
++      <div class="error" id="loginError"></div>
++    </section>
++
++    <section id="homeView" class="card hidden">
++      <h2>Welcome To GBM</h2>
++      <p id="homeMessage"></p>
++      <p>Choose a scheme module. Authentication stays in GBM; PPF only verifies the token.</p>
++      <p><button class="btn primary" data-open="ppf">Open PPF module</button></p>
++    </section>
++
++    <section id="ppfView" class="card hidden">
++      <h2>Public Provident Fund</h2>
++      <p id="ppfHome"></p>
++      <h3>Open account</h3>
++      <div class="row">
++        <div><label>Account number</label><input id="accNo" value="PPF24001852" /></div>
++        <div><label>Customer name</label><input id="custName" value="Ananya Rao" /></div>
++      </div>
++      <div class="row">
++        <div><label>Customer id</label><input id="custId" value="CUST1001" /></div>
++        <div><label>Opening balance</label><input id="openBal" value="5000" /></div>
++      </div>
++      <p><button class="btn primary" id="openAccBtn">Create account</button></p>
++      <div class="error" id="ppfError"></div>
++      <h3>Accounts</h3>
++      <table>
++        <thead><tr><th>Number</th><th>Customer</th><th>Balance</th><th>Status</th></tr></thead>
++        <tbody id="accRows"></tbody>
++      </table>
++    </section>
++  </main>
++  <script>
++    const GBM = "";
++    const state = { token: localStorage.getItem("gbmToken"), home: null };
++
++    const $ = (id) => document.getElementById(id);
++    const show = (id) => {
++      ["loginView", "homeView", "ppfView"].forEach((v) => $(v).classList.toggle("hidden", v !== id));
++    };
++
++    async function api(url, options = {}) {
++      const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
++      if (state.token) headers.Authorization = "Bearer " + state.token;
++      const res = await fetch(url, Object.assign({}, options, { headers }));
++      const text = await res.text();
++      const body = text ? JSON.parse(text) : {};
++      if (!res.ok) throw new Error(body.message || res.statusText);
++      return body;
++    }
++
++    async function afterLogin() {
++      state.home = await api(GBM + "/api/home");
++      $("userLabel").textContent = "User: " + state.home.user.username;
++      $("homeMessage").textContent = state.home.message + " — signed in as " + state.home.user.displayName;
++      $("moduleNav").classList.remove("hidden");
++      show("homeView");
++    }
++
++    $("loginBtn").onclick = async () => {
++      $("loginError").textContent = "";
++      try {
++        const res = await api(GBM + "/api/auth/login", {
++          method: "POST",
++          body: JSON.stringify({ username: $("username").value, password: $("password").value })
++        });
++        state.token = res.token;
++        localStorage.setItem("gbmToken", res.token);
++        await afterLogin();
++      } catch (e) { $("loginError").textContent = e.message; }
++    };
++
++    $("logoutBtn").onclick = async () => {
++      try { await api(GBM + "/api/auth/logout", { method: "POST" }); } catch (e) {}
++      state.token = null;
++      localStorage.removeItem("gbmToken");
++      $("moduleNav").classList.add("hidden");
++      $("userLabel").textContent = "";
++      show("loginView");
++    };
++
++    async function openPpf() {
++      $("ppfError").textContent = "";
++      const ppf = state.home.modules.find((m) => m.code === "PPF");
++      try {
++        const home = await api(ppf.baseUrl + ppf.homePath);
++        $("ppfHome").textContent = home.title + " — " + home.username;
++        const accounts = await api(ppf.baseUrl + ppf.accountsPath);
++        $("accRows").innerHTML = accounts.map((a) =>
++          `<tr><td>${a.accountNumber}</td><td>${a.customerName}</td><td>${a.balance}</td><td>${a.status}</td></tr>`
++        ).join("") || "<tr><td colspan='4'>No accounts yet</td></tr>";
++        document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.module === "ppf"));
++        show("ppfView");
++      } catch (e) { $("ppfError").textContent = e.message; show("ppfView"); }
++    }
++
++    $("openAccBtn").onclick = async () => {
++      const ppf = state.home.modules.find((m) => m.code === "PPF");
++      $("ppfError").textContent = "";
++      try {
++        await api(ppf.baseUrl + ppf.accountsPath, {
++          method: "POST",
++          body: JSON.stringify({
++            accountNumber: $("accNo").value,
++            customerName: $("custName").value,
++            customerId: $("custId").value,
++            openingBalance: Number($("openBal").value),
++            openedOn: new Date().toISOString().slice(0, 10)
++          })
++        });
++        await openPpf();
++      } catch (e) { $("ppfError").textContent = e.message; }
++    };
++
++    document.querySelectorAll("[data-module], [data-open]").forEach((el) => {
++      el.onclick = () => {
++        const target = el.dataset.module || el.dataset.open;
++        if (target === "home") { document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.module === "home")); show("homeView"); }
++        if (target === "ppf") openPpf();
++      };
++    });
++
++    if (state.token) afterLogin().catch(() => { localStorage.removeItem("gbmToken"); show("loginView"); });
++  </script>
++</body>
++</html>
+diff --git a/src/test/java/com/idbi/gbm/AuthFlowTest.java b/src/test/java/com/idbi/gbm/AuthFlowTest.java
+new file mode 100644
+index 0000000..02b73a8
+--- /dev/null
++++ b/src/test/java/com/idbi/gbm/AuthFlowTest.java
+@@ -0,0 +1,63 @@
++package com.idbi.gbm;
++
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.http.MediaType;
++import org.springframework.test.context.ActiveProfiles;
++import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.MvcResult;
++
++@SpringBootTest
++@AutoConfigureMockMvc
++@ActiveProfiles("test")
++class AuthFlowTest {
++    @Autowired
++    private MockMvc mockMvc;
++
++    @Test
++    void loginIssuesJwtThenHomeRequiresIt() throws Exception {
++        mockMvc.perform(post("/api/auth/bootstrap")
++                        .contentType(MediaType.APPLICATION_JSON)
++                        .content("""
++                                {"username":"admin.ppf","password":"Admin@123456","displayName":"GBM Admin"}
++                                """))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.username").value("admin.ppf"));
++
++        mockMvc.perform(get("/api/home")).andExpect(status().isUnauthorized());
++
++        MvcResult login = mockMvc.perform(post("/api/auth/login")
++                        .contentType(MediaType.APPLICATION_JSON)
++                        .content("""
++                                {"username":"admin.ppf","password":"Admin@123456"}
++                                """))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.token").isNotEmpty())
++                .andExpect(jsonPath("$.tokenType").value("Bearer"))
++                .andExpect(jsonPath("$.user.username").value("admin.ppf"))
++                .andReturn();
++
++        String token = com.fasterxml.jackson.databind.json.JsonMapper.builder().build()
++                .readTree(login.getResponse().getContentAsString())
++                .get("token")
++                .asText();
++
++        mockMvc.perform(get("/api/home").header("Authorization", "Bearer " + token))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.message").value("Welcome To GBM"))
++                .andExpect(jsonPath("$.modules[0].code").value("PPF"));
++
++        mockMvc.perform(post("/api/auth/logout").header("Authorization", "Bearer " + token))
++                .andExpect(status().isOk());
++
++        mockMvc.perform(get("/api/home").header("Authorization", "Bearer " + token))
++                .andExpect(status().isUnauthorized());
++    }
++}
+diff --git a/src/test/java/com/idbi/gbm/GbmApplicationTests.java b/src/test/java/com/idbi/gbm/GbmApplicationTests.java
+index a2cd2ef..0a79cba 100644
+--- a/src/test/java/com/idbi/gbm/GbmApplicationTests.java
++++ b/src/test/java/com/idbi/gbm/GbmApplicationTests.java
+@@ -2,12 +2,12 @@ package com.idbi.gbm;
+ 
+ import org.junit.jupiter.api.Test;
+ import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.test.context.ActiveProfiles;
+ 
+ @SpringBootTest
++@ActiveProfiles("test")
+ class GbmApplicationTests {
+ 
+-	@Test
+-	void contextLoads() {
+-	}
+-
++    @Test
++    void contextLoads() {}
+ }
+diff --git a/src/test/resources/application-test.properties b/src/test/resources/application-test.properties
+new file mode 100644
+index 0000000..e15a4b0
+--- /dev/null
++++ b/src/test/resources/application-test.properties
+@@ -0,0 +1,8 @@
++spring.datasource.url=jdbc:h2:mem:gbmtest;MODE=Oracle;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=true
++spring.datasource.username=sa
++spring.datasource.password=
++spring.datasource.driver-class-name=org.h2.Driver
++spring.jpa.hibernate.ddl-auto=create-drop
++gbm.seed-demo-admin=false
++gbm.jwt.secret=gbm-test-secret-please-change-32bytes!!
++gbm.jwt.ttl-minutes=30
+-- 
+2.43.0
+
