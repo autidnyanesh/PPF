@@ -1,4 +1,5 @@
 ﻿target/
+bin/
 .idea/
 *.iml
 .classpath
@@ -8,3 +9,4 @@ node_modules/
 dist/
 .env
 *.log
+*.class
